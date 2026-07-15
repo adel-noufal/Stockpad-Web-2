@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # StockPad — Engineer App (Website 2)
 
 A Django REST Framework backend + vanilla-JS frontend for Wheeler & Senior's internal material request workflow. Engineers submit material requests through this app; approvals are handled by [StockPad (Website 1)](https://stockpad-backend-production.up.railway.app) and pushed back here via signed webhooks.
@@ -249,3 +250,6 @@ Before deploying, ensure:
 ## License
 
 Internal capstone project — Wheeler & Senior.
+=======
+# Stockpad-Web-2
+>>>>>>> 4a5d5576a17db4f9b39e6fdb46abe110092e81f3
