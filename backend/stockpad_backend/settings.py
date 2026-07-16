@@ -224,4 +224,4 @@ if not DEBUG:
         raise ImproperlyConfigured(
             f"Production integration settings missing: {', '.join(missing_vars)}. "
             "Please configure these environment variables."
-        )
+        )
