@@ -127,15 +127,15 @@ const i18n = {
 // ══════════════════════════════════════════════════════════════
 // API
 // ══════════════════════════════════════════════════════════════
+const WM_BASE_URL = 'https://stockpad-backend-production.up.railway.app';
 const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.protocol === 'file:')
     ? 'http://127.0.0.1:8000'
-    : window.location.origin;
+    : WM_BASE_URL;
 const API_URL = `${API_BASE}/api`;
 
 // ── WM (Warehouse Manager) Site Integration ───────────────────
 // Base URL for the remote WM website API. Change this to match
 // the deployed WM server address (same value as WM_WEBSITE_BASE_URL in settings.py).
-const WM_BASE_URL = 'https://stockpad-backend-production.up.railway.app';
 const api = {
     getToken: () => localStorage.getItem('access_token'),
     setToken: (access, refresh) => { localStorage.setItem('access_token', access); if (refresh) localStorage.setItem('refresh_token', refresh); },
