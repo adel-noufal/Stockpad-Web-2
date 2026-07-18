@@ -178,17 +178,17 @@ const api = {
             return user;
         }
     },
-    register: async (username, email, password, role) => api.request('/auth/register/', 'POST', { username, email, password, role }, false),
+    register: async (username, email, password, role) => api.request('/auth/register/', 'POST', { username, email, password, password2: password, role }, false),
     googleLogin: async (credential) => {
         const data = await api.request('/auth/google/', 'POST', { credential }, false);
-        if (data) { 
-            api.setToken(data.access, data.refresh); 
-            localStorage.setItem('user_role', data.user.role || 'engineer'); 
-            localStorage.setItem('username', data.user.username); 
+        if (data) {
+            api.setToken(data.access, data.refresh);
+            localStorage.setItem('user_role', data.user.role || 'engineer');
+            localStorage.setItem('username', data.user.username);
             localStorage.setItem('user_id', data.user.id);
             // Persist email for WM integration calls
             localStorage.setItem('user_email', data.user.email || '');
-            return data.user; 
+            return data.user;
         }
     },
     logout: async () => { const refresh = localStorage.getItem('refresh_token'); if (refresh) await api.request('/auth/logout/', 'POST', { refresh }).catch(() => {}); api.clearToken(); localStorage.removeItem('remember_me'); localStorage.removeItem('user_email'); navigateTo('login'); },
