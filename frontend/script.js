@@ -133,14 +133,26 @@ const API_BASE = (window.location.hostname === 'localhost' || window.location.ho
     : WM_BASE_URL;
 // All API routes are mounted under /api/ in the backend root urls.py.
 // e.g., /api/auth/login/, /api/wm/catalog/, /api/requests/mine/
-const API_URL = `${API_BASE}/api`;
+const API_URL = `${API_BASE.replace(/\/+$/, '')}/api`;
 
-// Helper to construct API URLs safely, ensuring a single slash between API_URL and endpoint
-// and preserving trailing slashes correctly.
+/**
+ * Bulletproof URL constructor — call this for every backend fetch.
+ * Guarantees:
+ *   - Single slash between the API base and the endpoint path.
+ *   - Exactly one trailing slash on the path component (before query string).
+ *   - Query string preserved as-is.
+ *
+ * Examples:
+ *   buildApiUrl('/materials/')          → https://host/api/materials/
+ *   buildApiUrl('/materials/?search=x') → https://host/api/materials/?search=x
+ *   buildApiUrl('wm/catalog/')          → https://host/api/wm/catalog/
+ */
 function buildApiUrl(endpoint) {
-    const base = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
-    const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-    return `${base}${path}`;
+    const base = API_URL.replace(/\/+$/, '');           // strip any trailing slashes from base
+    const [rawPath, ...qParts] = endpoint.split('?');   // split off query string
+    const qs = qParts.length ? '?' + qParts.join('?') : '';
+    const path = '/' + rawPath.replace(/^\/+/, '').replace(/\/+$/, '') + '/'; // normalise to /path/
+    return `${base}${path}${qs}`;
 }
 
 // ── WM (Warehouse Manager) Site Integration ───────────────────
@@ -260,8 +272,8 @@ const api = {
     },
     getMyRequests: async (status = null) => { let ep = '/requests/mine/'; if (status) ep += `?status=${status}`; return api.request(ep); },
     getAllRequests: async (status = null) => { let ep = '/requests/all/'; if (status) ep += `?status=${status}`; return api.request(ep); },
-    approveRequest: async (id) => api.request(`/requests/${id}/approve/`, 'PATCH'),
-    rejectRequest: async (id, reason) => api.request(`/requests/${id}/reject/`, 'PATCH', { reason }),
+    // NOTE: approve/reject are handled exclusively by the WM webhook (SiteAWebhookView).
+    // There are no local /requests/<id>/approve/ or /requests/<id>/reject/ endpoints.
     updateRequest: async (id, quantity, justification) => api.request(`/requests/${id}/`, 'PATCH', { quantity_needed: quantity, justification }),
     deleteRequest: async (id) => api.request(`/requests/${id}/`, 'DELETE'),
     getConversations: async () => api.request('/chatbot/conversations/'),
@@ -861,10 +873,9 @@ async function submitRequest() {
         loadRequests();
     } catch(e) { api.showModal('Error', e.message, true); }
 }
-async function approveReq(id) { try { await api.approveRequest(id); loadRequests(); } catch(e) { api.showModal('Error', e.message, true); } }
-function openRejectionModal(id, name) { currentRejectId = id; document.getElementById('rejectionTarget').textContent = name; document.getElementById('rejectReason').value = ''; document.getElementById('rejectionModal').style.display = 'flex'; }
-function closeRejectionModal() { document.getElementById('rejectionModal').style.display = 'none'; }
-async function submitRejection() { const reason = document.getElementById('rejectReason').value; if (!reason) { api.showModal('Error', 'Please provide a rejection reason.', true); return; } try { await api.rejectRequest(currentRejectId, reason); closeRejectionModal(); loadRequests(); } catch(e) { api.showModal('Error', e.message, true); } }
+// NOTE: approveReq() and submitRejection() are intentionally removed.
+// Approval / rejection of MaterialRequests is handled exclusively by the WM
+// webhook (SiteAWebhookView). There are no local approve/reject endpoints.
 function openEditModal(id, name, qty, notes) { currentEditId = id; document.getElementById('editMaterialName').textContent = name; document.getElementById('editQuantity').value = qty; document.getElementById('editNotes').value = notes; document.getElementById('editModal').style.display = 'flex'; }
 function closeEditModal() { document.getElementById('editModal').style.display = 'none'; }
 async function updateRequest() { const qty = parseInt(document.getElementById('editQuantity').value); const notes = document.getElementById('editNotes').value; try { await api.updateRequest(currentEditId, qty, notes); api.showModal('Success', 'Request updated!'); closeEditModal(); loadRequests(); } catch(e) { api.showModal('Error', e.message, true); } }
