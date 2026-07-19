@@ -135,6 +135,14 @@ const API_BASE = (window.location.hostname === 'localhost' || window.location.ho
 // e.g., /api/auth/login/, /api/wm/catalog/, /api/requests/mine/
 const API_URL = `${API_BASE}/api`;
 
+// Helper to construct API URLs safely, ensuring a single slash between API_URL and endpoint
+// and preserving trailing slashes correctly.
+function buildApiUrl(endpoint) {
+    const base = API_URL.endsWith('/') ? API_URL.slice(0, -1) : API_URL;
+    const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    return `${base}${path}`;
+}
+
 // ── WM (Warehouse Manager) Site Integration ───────────────────
 // Base URL for the remote WM website API. Change this to match
 // the deployed WM server address (same value as WM_WEBSITE_BASE_URL in settings.py).
@@ -150,7 +158,8 @@ const api = {
         const config = { method, headers };
         if (body) config.body = body;
         try {
-            const response = await fetch(`${API_URL}${endpoint}`, config);
+            const url = buildApiUrl(endpoint);
+            const response = await fetch(url, config);
             if (response.status === 401 && useAuth) { api.clearToken(); navigateTo('login'); return null; }
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
