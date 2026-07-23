@@ -1,5 +1,9 @@
+import logging
+
 import requests
 from django.conf import settings
+
+logger = logging.getLogger('api')
 
 
 class SiteAError(Exception):
@@ -149,6 +153,61 @@ def check_engineer_status_on_wm(engineer_email: str) -> dict:
     return {"connected": False, "manager_name": None}
 
 
+_WM_REQUEST_ENDPOINTS = (
+    "/api/inventory/requests/",
+    "/api/inventory/requests/create/",
+)
+
+
+def _log_wm_request_sync_error(status_code, response_body: str) -> None:
+    msg = f"[WM Request Sync Error]: status {status_code} response {response_body[:1000]}"
+    print(msg)
+    logger.error(msg)
+
+
+def resolve_wm_material_id(material, engineer_email: str):
+    """Resolve the WM material PK for outbound request sync.
+
+    Uses Material.site_a_material_id when set; otherwise looks up the engineer's
+    WM catalog by material name and unit.
+    """
+    if material.site_a_material_id:
+        return material.site_a_material_id
+
+    engineer_email = (engineer_email or "").lower().strip()
+    if not engineer_email:
+        return None
+
+    try:
+        catalog = fetch_wm_catalog_for_engineer(engineer_email)
+    except Exception as exc:
+        logger.warning(
+            "WM catalog lookup failed while resolving material_id for '%s': %s",
+            material.name,
+            exc,
+        )
+        return None
+
+    name_key = (material.name or "").strip().lower()
+    unit_key = (material.unit or "").strip().lower()
+
+    for item in catalog:
+        item_name = (item.get("name") or "").strip().lower()
+        item_unit = (item.get("unit") or "").strip().lower()
+        if item_name == name_key and (not unit_key or item_unit == unit_key):
+            wm_id = item.get("id") or item.get("site_a_material_id")
+            if wm_id is not None:
+                return int(wm_id)
+
+    for item in catalog:
+        if (item.get("name") or "").strip().lower() == name_key:
+            wm_id = item.get("id") or item.get("site_a_material_id")
+            if wm_id is not None:
+                return int(wm_id)
+
+    return None
+
+
 def submit_request_to_site_a(
     *,
     material_id,
@@ -157,34 +216,58 @@ def submit_request_to_site_a(
     justification="",
     webhook_url=None,
 ):
-    """POST a new material request to the WM Website.
+    """POST a new material request to the WM Website (inventory_materialrequest).
+
+    Sends both legacy and WM-native field names so the remote serializer accepts
+    the payload regardless of version.
 
     Args:
         material_id:     The WM Website's own material PK (Material.site_a_material_id).
         quantity:        Integer/Decimal quantity being requested.
-        requester_email: Email of the PE engineer who raised the request — so the
-                         WM warehouse manager can see who submitted it.
-        justification:   Free-text reason for the request (maps to our local
-                         MaterialRequest.justification field).
-        webhook_url:     Full public URL of our receiver endpoint.  Falls back to
-                         SITE_B_PUBLIC_WEBHOOK_URL from settings when not provided.
+        requester_email: Email of the PE engineer who raised the request.
+        justification:   Free-text reason for the request.
+        webhook_url:     Full public URL of our receiver webhook endpoint.
 
     Returns:
-        dict — the WM Website's JSON response, which includes its own "id" for the
-        created request record.  This id is stored locally as site_a_request_id.
+        dict — WM JSON response including the created request "id".
+
+    Raises:
+        SiteAError: on non-2xx HTTP responses from WM.
+        requests.exceptions.RequestException: on network failures.
     """
+    requester_email = (requester_email or "").lower().strip()
+    notes = justification or ""
     payload = {
         "material_id": material_id,
+        "site_a_material_id": material_id,
         "quantity": quantity,
-        "justification": justification,
+        "requested_quantity": quantity,
+        "justification": notes,
+        "notes": notes,
         "requester_email": requester_email,
+        "engineer_email": requester_email,
         "webhook_url": webhook_url or settings.SITE_B_PUBLIC_WEBHOOK_URL,
     }
-    resp = requests.post(
-        f"{settings.WM_WEBSITE_BASE_URL}/api/inventory/requests/create/",
-        json=payload,
-        headers=_wm_headers(),
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    headers = _wm_headers()
+    last_error = None
+
+    for path in _WM_REQUEST_ENDPOINTS:
+        url = f"{settings.WM_WEBSITE_BASE_URL}{path}"
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=10)
+            if resp.ok:
+                return resp.json()
+            _log_wm_request_sync_error(resp.status_code, resp.text)
+            last_error = SiteAError(
+                f"WM request HTTP {resp.status_code} at {path}: {resp.text[:500]}"
+            )
+            if resp.status_code == 404:
+                continue
+            raise last_error
+        except requests.exceptions.RequestException as exc:
+            _log_wm_request_sync_error("network", str(exc))
+            raise
+
+    if last_error:
+        raise last_error
+    raise SiteAError("WM request sync failed: no endpoint accepted the payload.")

@@ -24,7 +24,13 @@ from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 
-from .site_a_client import submit_request_to_site_a, SiteAError, fetch_wm_catalog_for_engineer, check_engineer_status_on_wm
+from .site_a_client import (
+    submit_request_to_site_a,
+    SiteAError,
+    fetch_wm_catalog_for_engineer,
+    check_engineer_status_on_wm,
+    resolve_wm_material_id,
+)
 
 logger = logging.getLogger('api')
 
@@ -32,39 +38,51 @@ logger = logging.getLogger('api')
 _site_a_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="site_a_sync")
 
 
-def _sync_to_site_a(request_id, material_site_a_id, requester_email, quantity, reason):
+def _sync_to_site_a(request_id, material_pk, requester_email, quantity, reason):
     """
     Background worker: calls the WM Website and updates the local MaterialRequest with the result.
     Runs in a thread-pool thread so the HTTP response is never blocked by WM Website latency.
 
     Args:
-        request_id:        Local MaterialRequest PK — used to write back the result.
-        material_site_a_id: The WM Website's own material ID (Material.site_a_material_id).
-        requester_email:   Engineer's email — forwarded to WM so managers know who requested.
-        quantity:          Quantity being requested.
-        reason:            Free-text justification (maps to MaterialRequest.justification).
+        request_id:      Local MaterialRequest PK — used to write back the result.
+        material_pk:     Local Material PK — reloaded in-thread to resolve WM material_id.
+        requester_email: Engineer's email — forwarded to WM so managers know who requested.
+        quantity:        Quantity being requested.
+        reason:          Free-text justification (maps to MaterialRequest.justification).
     """
     from django.db import connection
+    from .models import MaterialRequest, Material
     try:
+        material = Material.objects.get(pk=material_pk)
+        wm_material_id = resolve_wm_material_id(material, requester_email)
+        if wm_material_id is None:
+            msg = (
+                f"material '{material.name}' has no site_a_material_id "
+                f"and WM catalog lookup failed for {requester_email}"
+            )
+            print(f"[WM Request Sync Error]: status missing_material_id response {msg}")
+            logger.error("[WM Request Sync Error]: %s", msg)
+            MaterialRequest.objects.filter(pk=request_id).update(sync_status='sync_failed')
+            return
+
+        if material.site_a_material_id != wm_material_id:
+            Material.objects.filter(pk=material_pk).update(site_a_material_id=wm_material_id)
+
         site_a_response = submit_request_to_site_a(
-            material_id=material_site_a_id,
+            material_id=wm_material_id,
             quantity=quantity,
             requester_email=requester_email,
-            justification=reason,
+            justification=reason or "",
         )
-        # Use .filter().update() — safe from any thread, avoids stale-object issues.
-        from .models import MaterialRequest
         MaterialRequest.objects.filter(pk=request_id).update(
             site_a_request_id=site_a_response["id"],
             sync_status='synced',
         )
         logger.info(f"[BG] Request {request_id} synced to WM Website (WM ID: {site_a_response['id']}).")
     except (SiteAError, requests.exceptions.RequestException) as e:
-        from .models import MaterialRequest
         MaterialRequest.objects.filter(pk=request_id).update(sync_status='sync_failed')
         logger.error(f"[BG] Failed to sync request {request_id} to WM Website: {e}")
     finally:
-        # Each thread-pool thread holds its own DB connection; close it to prevent pool exhaustion.
         connection.close()
 
 
@@ -244,12 +262,11 @@ class CreateRequestView(generics.CreateAPIView):
             f"Dispatching WM Website sync for request {material_request.id} "
             f"(material: {material_request.material.name}) to background thread."
         )
-        site_a_mat_id = material_request.material.site_a_material_id or material_request.material.id
         _site_a_executor.submit(
             _sync_to_site_a,
             material_request.id,
-            site_a_mat_id,
-            self.request.user.email,      # forwarded to WM so managers see who requested
+            material_request.material_id,
+            self.request.user.email,
             material_request.quantity_needed,
             material_request.justification,
         )

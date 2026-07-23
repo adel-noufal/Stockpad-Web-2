@@ -1,7 +1,7 @@
 import logging
 from django.core.management.base import BaseCommand, CommandError
 from api.models import MaterialRequest
-from api.site_a_client import submit_request_to_site_a, SiteAError
+from api.site_a_client import submit_request_to_site_a, SiteAError, resolve_wm_material_id
 import requests
 
 logger = logging.getLogger('api')
@@ -28,12 +28,23 @@ class Command(BaseCommand):
             try:
                 logger.info(f"Retrying sync for request {req.id} (Material: {req.material.name}, Qty: {req.quantity_needed}).")
 
-                if req.material.site_a_material_id is None:
-                    logger.error(f"Cannot sync request {req.id}: Material {req.material.name} lacks site_a_material_id.")
+                wm_material_id = resolve_wm_material_id(
+                    req.material,
+                    req.requested_by.email,
+                )
+                if wm_material_id is None:
+                    logger.error(
+                        f"Cannot sync request {req.id}: Material {req.material.name} "
+                        f"has no site_a_material_id and WM catalog lookup failed."
+                    )
                     continue
 
+                if req.material.site_a_material_id != wm_material_id:
+                    req.material.site_a_material_id = wm_material_id
+                    req.material.save(update_fields=['site_a_material_id'])
+
                 site_a_response = submit_request_to_site_a(
-                    material_id=req.material.site_a_material_id,
+                    material_id=wm_material_id,
                     requester_email=req.requested_by.email,
                     quantity=req.quantity_needed,
                     justification=req.justification or "",

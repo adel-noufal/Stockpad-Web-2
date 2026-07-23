@@ -241,13 +241,17 @@ class SiteAIntegrationTests(APITestCase):
 
         self.assertEqual(result["id"], 12345)
         mock_post.assert_called_once_with(
-            "https://mock-site-a.com/api/inventory/requests/create/",
+            "https://mock-site-a.com/api/inventory/requests/",
             json={
                 "material_id": 456,
+                "site_a_material_id": 456,
                 "quantity": 5,
+                "requested_quantity": 5,
                 "justification": "justification reason",
+                "notes": "justification reason",
                 "requester_email": "engineer@test.com",
-                "webhook_url": "https://mock-site-b.com/api/webhooks/material-status/"
+                "engineer_email": "engineer@test.com",
+                "webhook_url": "https://mock-site-b.com/api/webhooks/material-status/",
             },
             headers={"X-Site-B-API-Key": "test-site-b-api-key"},
             timeout=10
