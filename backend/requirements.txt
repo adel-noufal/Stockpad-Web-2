@@ -42,3 +42,4 @@ tzdata==2025.3
 urllib3==2.2.3
 gunicorn==22.0.0
 groq
+tabulate
