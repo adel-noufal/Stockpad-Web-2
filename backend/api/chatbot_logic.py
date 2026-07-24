@@ -1,9 +1,10 @@
-import requests
+# import requests
 import pandas as pd
 import os
 import logging
 from pathlib import Path
 from typing import Optional, Dict, Any
+from groq import Groq
 
 logger = logging.getLogger(__name__)
 
@@ -60,11 +61,13 @@ class GeminiAPIError(Exception):
 
 class InventoryChatBot:
     """
-    Refactored InventoryChatBot compatible with Python 3.8 and REST API.
+    Refactored InventoryChatBot compatible with Python 3.8 and REST API, updated to use Groq.
     """
 
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
+        # Preserve original environment setup for reference but comment out/adjust
+        # self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
+        self.api_key = api_key or os.environ.get("GROQ_API_KEY", "")
         self.inventory_data: str = ""
         self.website_faq: str = "الموقع بيسمحلك ترفع ملف خطة إنتاج وتقارنها بالمخزن."
         self.uploaded_file_data: str = ""
@@ -84,9 +87,9 @@ class InventoryChatBot:
         """
 
     def generate_response(self, user_question: str, history=None, user_lang: str = "en") -> str:
-        """Generates response using direct REST API, supporting multi-turn conversation."""
+        """Generates response using Groq, supporting multi-turn conversation."""
         if not self.api_key:
-            raise GeminiAPIError(403, "GEMINI_API_KEY is not configured")
+            raise GeminiAPIError(403, "GROQ_API_KEY is not configured")
 
         try:
             # 1. System instruction and context
@@ -97,64 +100,70 @@ class InventoryChatBot:
             if self.uploaded_file_data:
                 system_prompt += f"{self.uploaded_file_data}\n\n"
 
-            # 2. Build multi-turn contents
-            contents = []
+            # 2. Build multi-turn messages for Groq
+            messages = []
             
-            # Add previous messages as "user" and "model" roles
+            # System instruction as a system message
+            messages.append({"role": "system", "content": system_prompt})
+            
+            # Add previous messages
             if history:
                 for msg in history:
-                    contents.append({"role": "user", "parts": [{"text": msg['message']}]})
-                    contents.append({"role": "model", "parts": [{"text": msg['reply']}]})
+                    messages.append({"role": "user", "content": msg['message']})
+                    messages.append({"role": "assistant", "content": msg['reply']})
             
-            # Add current user prompt with inventory context prepended
-            user_prompt = system_prompt + f"\n❓ سؤال المستخدم: {user_question}"
+            # Add current user prompt
+            user_prompt = f"❓ سؤال المستخدم: {user_question}"
             if not self.uploaded_file_data:
                 user_prompt += "\n(لا يوجد ملف مرفوع حالياً - استخدم بيانات المخزن الأساسية فقط)"
             
-            contents.append({"role": "user", "parts": [{"text": user_prompt}]})
+            messages.append({"role": "user", "content": user_prompt})
 
-            # Call API via requests directly with gemini-2.0-flash
-            api_url = (
-                f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.0-flash:generateContent?key={self.api_key}"
-            )
-
-            payload = {
-                "contents": contents,
-                "generationConfig": {
-                    "temperature": 0.7,
-                    "maxOutputTokens": 2048,
-                }
-            }
+            # --- Preserved Gemini Implementation for Reference ---
+            # # Call API via requests directly with gemini-2.0-flash
+            # api_url = (
+            #     f"https://generativelanguage.googleapis.com/v1beta/models/"
+            #     f"gemini-2.0-flash:generateContent?key={self.api_key}"
+            # )
+            # payload = {
+            #     "contents": contents,
+            #     "generationConfig": {
+            #         "temperature": 0.7,
+            #         "maxOutputTokens": 2048,
+            #     }
+            # }
+            # try:
+            #     resp = requests.post(api_url, json=payload, timeout=30)
+            #     if resp.status_code == 200:
+            #         data = resp.json()
+            #         try:
+            #             return data["candidates"][0]["content"]["parts"][0]["text"]
+            #         except Exception as e:
+            #             logger.exception("Failed to parse Gemini response JSON. Response: %s", data)
+            #             return "تلقيت رداً لكن لم أتمكن من قراءته." if user_lang == "ar" else "I received a response but couldn't parse it."
+            #     else:
+            #         logger.error("Gemini API request failed...")
+            # ------------------------------------------------------
 
             try:
-                resp = requests.post(api_url, json=payload, timeout=30)
+                # Initialize the Groq client
+                client = Groq(api_key=self.api_key)
                 
-                if resp.status_code == 200:
-                    data = resp.json()
-                    try:
-                        return data["candidates"][0]["content"]["parts"][0]["text"]
-                    except Exception as e:
-                        logger.exception("Failed to parse Gemini response JSON. Response: %s", data)
-                        return "تلقيت رداً لكن لم أتمكن من قراءته." if user_lang == "ar" else "I received a response but couldn't parse it."
+                # Update the chat completion logic to use model "llama-3.3-70b-versatile"
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=messages,
+                    temperature=0.7,
+                )
+                
+                if response and response.choices:
+                    return response.choices[0].message.content
                 else:
-                    logger.error(
-                        "Gemini API request failed with status code %s. Response: %s",
-                        resp.status_code,
-                        resp.text
-                    )
-                    if resp.status_code == 429:
-                        return "⚠️ تجاوزت الحد المسموح. انتظر دقيقة وحاول تاني." if user_lang == "ar" else "⚠️ AI quota exceeded. Please wait a moment."
-                    if resp.status_code == 403:
-                        detail = resp.text[:500] if resp.text else "Forbidden"
-                        raise GeminiAPIError(403, detail)
-                    return f"⚠️ حصل مشكلة تقنية ({resp.status_code})." if user_lang == "ar" else f"⚠️ AI error ({resp.status_code})."
-            except requests.RequestException as e:
-                logger.exception("Network connection to Gemini API failed: %s", e)
-                return f"❌ حصلت مشكلة في الاتصال بالنموذج: {str(e)}"
+                    return "تلقيت رداً فارغاً من النموذج." if user_lang == "ar" else "I received an empty response from the model."
+            except Exception as e:
+                logger.exception("Groq API request failed: %s", e)
+                return f"❌ حصلت مشكلة في الاتصال بالنموذج (Groq): {str(e)}"
 
-        except GeminiAPIError:
-            raise
         except Exception as e:
             logger.exception("Unexpected error in chatbot logic: %s", e)
             return f"❌ حصلت مشكلة: {str(e)}"
